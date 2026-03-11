@@ -8,24 +8,34 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
 
       - name: Install deps
         run: npm ci
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      
 
       - name: Bump version and update manifest/versions
         id: bump
@@ -33,19 +43,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          CURRENT_VERSION="$(node -p "require('./package.json').version")"
-
-          # Bumps package.json version, runs version-bump.mjs (via npm version hook), and creates a git tag.
           npm version patch -m "chore(release): v%s [skip ci]"
 
           NEW_VERSION="$(node -p "require('./package.json').version")"
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # npm version already commits + tags package.json/package-lock.json.
-          # Add files modified by version-bump.mjs and amend release commit.
           git add manifest.json versions.json || true
           if ! git diff --cached --quiet; then
             git commit --amend --no-edit
@@ -53,6 +55,7 @@ jobs:
           fi
 
           git push origin HEAD:main --follow-tags
+      
 
       - name: Create GitHub Release
         env:
