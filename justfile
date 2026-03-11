@@ -10,7 +10,7 @@ showver:
 
 bump level="patch":
 	npm version {{level}}
-	@echo Bumped version to v{{version}}
+	@echo Bumped version to {{version}}
 
 patch:
 	just bump patch
@@ -23,10 +23,10 @@ major:
 
 tag:
 	git push
-	@if git ls-remote --exit-code --tags origin v{{version}} >/dev/null 2>&1; then \
-		echo "Tag v{{version}} already exists on origin"; \
+	@if git ls-remote --exit-code --tags origin {{version}} >/dev/null 2>&1; then \
+		echo "Tag {{version}} already exists on origin"; \
 	else \
-		git tag -f v{{version}} && git push origin v{{version}}; \
+		git tag -f {{version}} && git push origin {{version}}; \
 	fi
 
 release level="patch":
