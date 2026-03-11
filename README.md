@@ -55,7 +55,7 @@ When you check/uncheck a task in Obsidian, it's immediately updated in Todoist.
 
 ```bash
 git clone https://github.com/jlentink/obsidian-taakje.git
-cd taakje
+cd obsidian-taakje
 npm install
 npm run build
 ```
