@@ -1,10 +1,10 @@
 {
-	"id": "taakje-plugin",
-	"name": "Taakje Plugin",
+	"id": "taakje",
+	"name": "Taakje (todoist sync)",
 	"version": "1.0.8",
 	"minAppVersion": "0.15.0",
-	"description": "Sync Todoist tasks with Obsidian.",
+	"description": "Two-way sync Todoist. Keep your tasks in sync across both platforms — create, complete, and manage Todoist tasks directly from your vault.",
 	"author": "JLentink",
-	"authorUrl": "https://github.com/jlentink/obsidian-taakje",
+	"authorUrl": "https://github.com/jlentink",
 	"isDesktopOnly": false
 }
