@@ -1,8 +1,6 @@
-import {App, PluginSettingTab, Setting} from "obsidian";
-import TaakjePlugin from "./main";
-
 export interface TaakjePluginSettings {
-	todoistApiKey: string | null;
+	todoistApiKeySecretId: string | null; // ID of the secret in SecretStorage
+	todoistApiKey: string | null; // Deprecated - kept for migration
 	defaultProject: string | null;
 	syncInterval: number;
 	addObsidianLabel: boolean;
@@ -11,6 +9,7 @@ export interface TaakjePluginSettings {
 }
 
 export const DEFAULT_SETTINGS: TaakjePluginSettings = {
+	todoistApiKeySecretId: null,
 	todoistApiKey: null,
 	defaultProject: null,
 	syncInterval: 5,
@@ -19,16 +18,3 @@ export const DEFAULT_SETTINGS: TaakjePluginSettings = {
 	debug: false
 };
 
-export class TaakjeSettingTab extends PluginSettingTab {
-	plugin: TaakjePlugin;
-
-	constructor(app: App, plugin: TaakjePlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const {containerEl} = this;
-		containerEl.empty();
-	}
-}

@@ -1,9 +1,10 @@
-import {App, Plugin, PluginSettingTab, Setting, ButtonComponent, DropdownComponent, requestUrl, Notice} from 'obsidian';
+import {App, Plugin, PluginSettingTab, Setting, ButtonComponent, DropdownComponent, requestUrl, Notice, SecretComponent} from 'obsidian';
 import {DEFAULT_SETTINGS, TaakjePluginSettings} from "./settings";
 
 export class TaakjeSettingTab extends PluginSettingTab {
 	plugin: TaakjePlugin;
 	projects: Record<string, string> = {};
+	labels: Record<string, string> = {};
 
 	constructor(app: App, plugin: TaakjePlugin) {
 		super(app, plugin);
@@ -35,39 +36,84 @@ export class TaakjeSettingTab extends PluginSettingTab {
 		}
 	}
 
+	async fetchLabels(apiKey: string): Promise<Record<string, string>> {
+		if (!apiKey) return {};
+		try {
+			const response = await requestUrl({
+				url: 'https://api.todoist.com/api/v1/labels',
+				method: 'GET',
+				headers: { 'Authorization': `Bearer ${apiKey}` },
+				throw: false
+			});
+			this.plugin.log('[Taakje] Labels API response:', response.status, response.json);
+			if (response.status !== 200) return {};
+			const json = response.json;
+			const raw = Array.isArray(json) ? json : (json?.results ?? []);
+			const data = raw as Array<{id: string, name: string}>;
+			const labels: Record<string, string> = {};
+			for (const label of data) {
+				labels[label.name] = label.name;
+			}
+			this.plugin.log('[Taakje] Parsed labels:', labels);
+			return labels;
+		} catch (e) {
+			this.plugin.log('[Taakje] Error fetching labels:', e);
+			return {};
+		}
+	}
+
 	display(): void {
 		const {containerEl} = this;
 		containerEl.empty();
 
-		if (this.plugin.settings.todoistApiKey && Object.keys(this.projects).length === 0) {
-			this.fetchProjects(this.plugin.settings.todoistApiKey).then(projects => {
-				if (Object.keys(projects).length > 0) {
-					this.projects = projects;
-					this.display();
-				}
-			});
-		}
+		// Load projects and labels if we have an API key
+		this.plugin.getApiKey().then(apiKey => {
+			if (apiKey && Object.keys(this.projects).length === 0) {
+				this.fetchProjects(apiKey).then(projects => {
+					if (Object.keys(projects).length > 0) {
+						this.projects = projects;
+						this.display();
+					}
+				}).catch(() => {
+					// Ignore errors
+				});
+			}
+			if (apiKey && Object.keys(this.labels).length === 0) {
+				this.fetchLabels(apiKey).then(labels => {
+					if (Object.keys(labels).length > 0) {
+						this.labels = labels;
+						this.display();
+					}
+				}).catch(() => {
+					// Ignore errors
+				});
+			}
+		}).catch(() => {
+			// Ignore errors
+		});
 
 		new Setting(containerEl)
-			.setName('Todoist API Key')
-			.setDesc('Enter your Todoist API key')
-			.addText(text => text
-				.setPlaceholder('Paste API key here')
-				.setValue(this.plugin.settings.todoistApiKey || '')
+			.setName('Todoist API key')
+			.setDesc('Select a secret from SecretStorage')
+			.addComponent(el => new SecretComponent(this.app, el)
+				.setValue(this.plugin.settings.todoistApiKeySecretId || '')
 				.onChange(async (value) => {
-					this.plugin.settings.todoistApiKey = value;
+					this.plugin.settings.todoistApiKeySecretId = value;
 					await this.plugin.saveSettings();
 				}));
 
 		new Setting(containerEl)
-			.setName('Test Todoist Connection')
+			.setName('Test Todoist connection')
 			.setDesc('Verify your API key and fetch projects')
 			.addButton((button: ButtonComponent) => {
-				button.setButtonText('Test Connection').onClick(async () => {
-					const projects = await this.fetchProjects(this.plugin.settings.todoistApiKey || '');
+				button.setButtonText('Test connection').onClick(async () => {
+					const currentApiKey = await this.plugin.getApiKey();
+					const projects = await this.fetchProjects(currentApiKey || '');
+					const labels = await this.fetchLabels(currentApiKey || '');
 					if (Object.keys(projects).length > 0) {
 						new Notice('Connection successful!');
 						this.projects = projects;
+						this.labels = labels;
 						this.display();
 					} else {
 						new Notice('Connection failed. Check your API key.');
@@ -77,7 +123,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 
 		if (Object.keys(this.projects).length > 0) {
 			new Setting(containerEl)
-				.setName('Default Project')
+				.setName('Default project')
 				.setDesc('Select the default Todoist project for new tasks')
 				.addDropdown((dropdown: DropdownComponent) => {
 					dropdown.addOptions(this.projects);
@@ -90,7 +136,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName('Sync Interval')
+			.setName('Sync interval')
 			.setDesc('How often to sync tasks from Todoist to Obsidian')
 			.addDropdown((dropdown: DropdownComponent) => {
 				dropdown.addOptions({
@@ -109,7 +155,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 			});
 
 		new Setting(containerEl)
-			.setName('Add Obsidian Label')
+			.setName('Add Obsidian label')
 			.setDesc('Add a label to all tasks created from Obsidian')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.addObsidianLabel)
@@ -120,20 +166,34 @@ export class TaakjeSettingTab extends PluginSettingTab {
 				}));
 
 		if (this.plugin.settings.addObsidianLabel) {
-			new Setting(containerEl)
-				.setName('Obsidian Label Name')
-				.setDesc('The label name to add to tasks (without @)')
-				.addText(text => text
-					.setPlaceholder('obsidian')
-					.setValue(this.plugin.settings.obsidianLabel || 'obsidian')
-					.onChange(async (value) => {
-						this.plugin.settings.obsidianLabel = value || 'obsidian';
-						await this.plugin.saveSettings();
-					}));
+			if (Object.keys(this.labels).length > 0) {
+				new Setting(containerEl)
+					.setName('Obsidian label name')
+					.setDesc('Select a label from your Todoist labels')
+					.addDropdown((dropdown: DropdownComponent) => {
+						dropdown.addOptions(this.labels);
+						dropdown.setValue(this.plugin.settings.obsidianLabel || 'obsidian');
+						dropdown.onChange(async (value) => {
+							this.plugin.settings.obsidianLabel = value || 'obsidian';
+							await this.plugin.saveSettings();
+						});
+					});
+			} else {
+				new Setting(containerEl)
+					.setName('Obsidian label name')
+					.setDesc('The label name to add to tasks (without @). Test connection to load labels.')
+					.addText(text => text
+						.setPlaceholder('Obsidian')
+						.setValue(this.plugin.settings.obsidianLabel || 'obsidian')
+						.onChange(async (value) => {
+							this.plugin.settings.obsidianLabel = value || 'obsidian';
+							await this.plugin.saveSettings();
+						}));
+			}
 		}
 
 		new Setting(containerEl)
-			.setName('Debug Mode')
+			.setName('Debug mode')
 			.setDesc('Show debug messages in the console')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.debug)
@@ -152,6 +212,52 @@ export default class TaakjePlugin extends Plugin {
 	log(...args: unknown[]) {
 		if (this.settings?.debug === true) {
 			console.log(...args);
+		}
+	}
+
+	// Get API key from secret storage
+	async getApiKey(): Promise<string | null> {
+		try {
+			// Migration: if we have old todoistApiKey in settings, migrate it to secret storage
+			if (this.settings.todoistApiKey && !this.settings.todoistApiKeySecretId) {
+				this.log('[Taakje] Migrating API key from settings to secret storage');
+				// Create a unique secret ID for this vault
+				const secretId = 'todoist-api-key';
+
+				// Check if secretStorage is available (added in Obsidian 1.11.4)
+				if (this.app.secretStorage) {
+					this.app.secretStorage.setSecret(secretId, this.settings.todoistApiKey);
+					this.settings.todoistApiKeySecretId = secretId;
+					// Clear old storage
+					this.settings.todoistApiKey = null;
+					await this.saveSettings();
+					this.log('[Taakje] Migration completed');
+					return this.app.secretStorage.getSecret(secretId);
+				} else {
+					// Fallback for older Obsidian versions
+					this.log('[Taakje] SecretStorage not available, using settings storage');
+					return this.settings.todoistApiKey;
+				}
+			}
+
+			// Get secret from storage using the secret ID
+			if (this.settings.todoistApiKeySecretId) {
+				if (this.app.secretStorage) {
+					const secret = this.app.secretStorage.getSecret(this.settings.todoistApiKeySecretId);
+					return secret;
+				} else {
+					// Fallback to old storage if secretStorage not available
+					this.log('[Taakje] SecretStorage not available, using settings');
+					return this.settings.todoistApiKey;
+				}
+			}
+
+			// No API key configured
+			return null;
+		} catch (e) {
+			this.log('[Taakje] Error getting API key from secret storage:', e);
+			// Fallback to settings
+			return this.settings.todoistApiKey;
 		}
 	}
 
@@ -281,7 +387,7 @@ export default class TaakjePlugin extends Plugin {
 	}
 
 	async fetchProjects(): Promise<void> {
-		const apiKey = this.settings.todoistApiKey;
+		const apiKey = await this.getApiKey();
 		if (!apiKey) return;
 		try {
 			const response = await requestUrl({
@@ -344,7 +450,7 @@ export default class TaakjePlugin extends Plugin {
 
 	// Haal de status van een Todoist task op
 	async getTodoistTaskStatus(taskId: string): Promise<boolean | null> {
-		const apiKey = this.settings.todoistApiKey;
+		const apiKey = await this.getApiKey();
 		if (!apiKey) return null;
 
 		this.log('[Taakje] 🔍 Checking Todoist task status for ID:', taskId);
@@ -383,7 +489,7 @@ export default class TaakjePlugin extends Plugin {
 
 	// Complete een Todoist task
 	async completeTodoistTask(taskId: string): Promise<boolean> {
-		const apiKey = this.settings.todoistApiKey;
+		const apiKey = await this.getApiKey();
 		if (!apiKey) return false;
 
 		this.log('[Taakje] ✅ Completing Todoist task:', taskId);
@@ -413,7 +519,7 @@ export default class TaakjePlugin extends Plugin {
 
 	// Heropen een Todoist task
 	async reopenTodoistTask(taskId: string): Promise<boolean> {
-		const apiKey = this.settings.todoistApiKey;
+		const apiKey = await this.getApiKey();
 		if (!apiKey) return false;
 
 		this.log('[Taakje] ⬜ Reopening Todoist task:', taskId);
@@ -442,7 +548,7 @@ export default class TaakjePlugin extends Plugin {
 	}
 
 	async createTodoistTask(content: string, obsidianLink: string, parentId: string | null = null): Promise<string | null> {
-		const apiKey = this.settings.todoistApiKey;
+		const apiKey = await this.getApiKey();
 		if (!apiKey) return null;
 
 		// Extract project from content
