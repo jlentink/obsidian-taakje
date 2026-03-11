@@ -1,0 +1,10 @@
+{
+	"id": "taakje-plugin",
+	"name": "Taakje Plugin",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Sync Todoist tasks with Obsidian.",
+	"author": "JLentink",
+	"authorUrl": "https://github.com/jlentink/obsidian-taakje",
+	"isDesktopOnly": false
+}

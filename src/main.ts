@@ -1,0 +1,673 @@
+import {App, Plugin, PluginSettingTab, Setting, ButtonComponent, DropdownComponent, requestUrl, Notice} from 'obsidian';
+import {DEFAULT_SETTINGS, TaakjePluginSettings} from "./settings";
+
+export class TaakjeSettingTab extends PluginSettingTab {
+	plugin: TaakjePlugin;
+	projects: Record<string, string> = {};
+
+	constructor(app: App, plugin: TaakjePlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	async fetchProjects(apiKey: string): Promise<Record<string, string>> {
+		if (!apiKey) return {};
+		try {
+			const response = await requestUrl({
+				url: 'https://api.todoist.com/api/v1/projects',
+				method: 'GET',
+				headers: { 'Authorization': `Bearer ${apiKey}` },
+				throw: false
+			});
+			this.plugin.log('[Taakje] Projects API response:', response.status, response.json);
+			if (response.status !== 200) return {};
+			const json = response.json;
+			// API v1 retourneert { results: [...] } of direct een array
+			const raw = Array.isArray(json) ? json : (json?.results ?? []);
+			const data = raw as Array<{id: string, name: string}>;
+			const projects: Record<string, string> = {};
+			for (const p of data) projects[p.id] = p.name;
+			this.plugin.log('[Taakje] Parsed projects:', projects);
+			return projects;
+		} catch (e) {
+			this.plugin.log('[Taakje] Error fetching projects:', e);
+			return {};
+		}
+	}
+
+	display(): void {
+		const {containerEl} = this;
+		containerEl.empty();
+
+		if (this.plugin.settings.todoistApiKey && Object.keys(this.projects).length === 0) {
+			this.fetchProjects(this.plugin.settings.todoistApiKey).then(projects => {
+				if (Object.keys(projects).length > 0) {
+					this.projects = projects;
+					this.display();
+				}
+			});
+		}
+
+		new Setting(containerEl)
+			.setName('Todoist API Key')
+			.setDesc('Enter your Todoist API key')
+			.addText(text => text
+				.setPlaceholder('Paste API key here')
+				.setValue(this.plugin.settings.todoistApiKey || '')
+				.onChange(async (value) => {
+					this.plugin.settings.todoistApiKey = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Test Todoist Connection')
+			.setDesc('Verify your API key and fetch projects')
+			.addButton((button: ButtonComponent) => {
+				button.setButtonText('Test Connection').onClick(async () => {
+					const projects = await this.fetchProjects(this.plugin.settings.todoistApiKey || '');
+					if (Object.keys(projects).length > 0) {
+						new Notice('Connection successful!');
+						this.projects = projects;
+						this.display();
+					} else {
+						new Notice('Connection failed. Check your API key.');
+					}
+				});
+			});
+
+		if (Object.keys(this.projects).length > 0) {
+			new Setting(containerEl)
+				.setName('Default Project')
+				.setDesc('Select the default Todoist project for new tasks')
+				.addDropdown((dropdown: DropdownComponent) => {
+					dropdown.addOptions(this.projects);
+					dropdown.setValue(this.plugin.settings.defaultProject || '');
+					dropdown.onChange(async (value) => {
+						this.plugin.settings.defaultProject = value;
+						await this.plugin.saveSettings();
+					});
+				});
+		}
+
+		new Setting(containerEl)
+			.setName('Sync Interval')
+			.setDesc('How often to sync tasks from Todoist to Obsidian')
+			.addDropdown((dropdown: DropdownComponent) => {
+				dropdown.addOptions({
+					'1': '1 minute',
+					'5': '5 minutes',
+					'10': '10 minutes',
+					'15': '15 minutes',
+					'30': '30 minutes',
+					'60': '1 hour'
+				});
+				dropdown.setValue(String(this.plugin.settings.syncInterval ?? 5));
+				dropdown.onChange(async (value) => {
+					this.plugin.settings.syncInterval = parseInt(value);
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl)
+			.setName('Add Obsidian Label')
+			.setDesc('Add a label to all tasks created from Obsidian')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.addObsidianLabel)
+				.onChange(async (value) => {
+					this.plugin.settings.addObsidianLabel = value;
+					await this.plugin.saveSettings();
+					this.display(); // Refresh to show/hide label input
+				}));
+
+		if (this.plugin.settings.addObsidianLabel) {
+			new Setting(containerEl)
+				.setName('Obsidian Label Name')
+				.setDesc('The label name to add to tasks (without @)')
+				.addText(text => text
+					.setPlaceholder('obsidian')
+					.setValue(this.plugin.settings.obsidianLabel || 'obsidian')
+					.onChange(async (value) => {
+						this.plugin.settings.obsidianLabel = value || 'obsidian';
+						await this.plugin.saveSettings();
+					}));
+		}
+
+		new Setting(containerEl)
+			.setName('Debug Mode')
+			.setDesc('Show debug messages in the console')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.debug)
+				.onChange(async (value) => {
+					this.plugin.settings.debug = value;
+					await this.plugin.saveSettings();
+				}));
+	}
+}
+
+export default class TaakjePlugin extends Plugin {
+	settings: TaakjePluginSettings;
+	projects: Record<string, string> = {}; // clean name -> project ID
+
+	// Debug log helper - alleen loggen als debug mode aan staat
+	log(...args: unknown[]) {
+		if (this.settings?.debug === true) {
+			console.log(...args);
+		}
+	}
+
+	async onload() {
+		await this.loadSettings();
+		this.addSettingTab(new TaakjeSettingTab(this.app, this));
+
+		// Command: Process huidige file
+		this.addCommand({
+			id: 'process-current-file',
+			name: 'Process current file',
+			callback: async () => {
+				await this.processCurrentFile();
+			}
+		});
+
+		// Ribbon icon in de linker balk
+		this.addRibbonIcon('check-square', 'Taakje: Process file', async () => {
+			await this.processCurrentFile();
+		});
+
+		// Luister naar checkbox changes met capture phase
+		this.registerDomEvent(document, 'change', async (event: Event) => {
+			const target = event.target as HTMLElement;
+
+			// Moet een checkbox input zijn
+			if (target.tagName !== 'INPUT') return;
+			if ((target as HTMLInputElement).type !== 'checkbox') return;
+
+			const checkbox = target as HTMLInputElement;
+			const isChecked = checkbox.checked;
+			const file = this.app.workspace.getActiveFile();
+			if (!file) return;
+
+			// Vind de task text in de parent element
+			const taskItem = target.closest('.task-list-item') || target.closest('li');
+			const taskText = taskItem?.textContent?.trim() || 'Unknown task';
+
+			this.log('[Taakje] ═══════════════════════════════════════');
+			this.log('[Taakje] ☑️ CHECKBOX CHANGED (DOM)');
+			this.log('[Taakje] 📄 File:', file.path);
+			this.log('[Taakje] 📝 Task:', taskText);
+			this.log('[Taakje] 🔄 Changed to:', isChecked ? 'COMPLETED ✅' : 'OPEN ⬜');
+			this.log('[Taakje] ═══════════════════════════════════════');
+		}, true); // capture phase
+
+		// Backup: Luister naar file modifications en detecteer checkbox changes
+		let previousContent: Record<string, string> = {};
+
+		this.registerEvent(
+			this.app.vault.on('modify', async (abstractFile) => {
+				if (!abstractFile.path.endsWith('.md')) return;
+
+				// Type guard voor TFile
+				const file = this.app.vault.getAbstractFileByPath(abstractFile.path);
+				if (!file || !('stat' in file)) return;
+
+				const content = await this.app.vault.read(file as import('obsidian').TFile);
+				const prevContent = previousContent[abstractFile.path];
+
+				if (prevContent) {
+					// Vergelijk oude en nieuwe content om checkbox changes te vinden
+					const oldLines = prevContent.split('\n');
+					const newLines = content.split('\n');
+
+					const taskRegex = /^(\s*)-\s*\[([ xX])\]\s*(.*)$/;
+					const todoistLinkRegex = /\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/([^\)]+)\)/;
+
+					for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
+						const oldLine = oldLines[i] || '';
+						const newLine = newLines[i] || '';
+
+						if (oldLine !== newLine) {
+							const oldMatch = oldLine.match(taskRegex);
+							const newMatch = newLine.match(taskRegex);
+
+							if (oldMatch && newMatch && oldMatch[2] && newMatch[2] && newMatch[3]) {
+								const oldCompleted = oldMatch[2].toLowerCase() === 'x';
+								const newCompleted = newMatch[2].toLowerCase() === 'x';
+
+								if (oldCompleted !== newCompleted) {
+									const taskText = newMatch[3].trim();
+									const todoistMatch = taskText.match(todoistLinkRegex);
+									const todoistId = todoistMatch ? todoistMatch[1] : null;
+
+									this.log('[Taakje] ═══════════════════════════════════════');
+									this.log('[Taakje] ☑️ CHECKBOX CHANGED (File Modify)');
+									this.log('[Taakje] 📄 File:', abstractFile.path);
+									this.log('[Taakje] 📝 Line:', i + 1);
+									this.log('[Taakje] 📝 Task:', taskText);
+									this.log('[Taakje] 🔄 Changed to:', newCompleted ? 'COMPLETED ✅' : 'OPEN ⬜');
+									this.log('[Taakje] 🔗 Todoist ID:', todoistId || 'No Todoist link');
+									this.log('[Taakje] ═══════════════════════════════════════');
+
+									// Update Todoist als we een ID hebben
+									if (todoistId) {
+										if (newCompleted) {
+											const success = await this.completeTodoistTask(todoistId);
+											if (success) {
+												new Notice('Taakje: Task completed in Todoist');
+											}
+										} else {
+											const success = await this.reopenTodoistTask(todoistId);
+											if (success) {
+												new Notice('Taakje: Task reopened in Todoist');
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+
+				// Update previous content
+				previousContent[abstractFile.path] = content;
+			})
+		);
+
+		// Initialize previous content for active file
+		const activeFile = this.app.workspace.getActiveFile();
+		if (activeFile) {
+			this.app.vault.read(activeFile).then(content => {
+				previousContent[activeFile.path] = content;
+			});
+		}
+	}
+
+	async fetchProjects(): Promise<void> {
+		const apiKey = this.settings.todoistApiKey;
+		if (!apiKey) return;
+		try {
+			const response = await requestUrl({
+				url: 'https://api.todoist.com/api/v1/projects',
+				method: 'GET',
+				headers: { 'Authorization': `Bearer ${apiKey}` },
+				throw: false
+			});
+			this.log('[Taakje] fetchProjects response status:', response.status);
+			if (response.status !== 200) return;
+			const json = response.json;
+			const raw = Array.isArray(json) ? json : (json?.results ?? []);
+			const data = raw as Array<{id: string, name: string}>;
+			this.projects = {};
+			for (const p of data) {
+				// Strip emoji's en spaties, lowercase voor matching -> project ID
+				const cleanName = this.stripForMatching(p.name);
+				this.projects[cleanName] = p.id; // clean name -> project ID
+				this.log('[Taakje] Added project:', cleanName, '->', p.id, '(', p.name, ')');
+			}
+			this.log('[Taakje] Total projects loaded:', Object.keys(this.projects).length);
+		} catch (e) {
+			this.log('[Taakje] Error fetching projects:', e);
+		}
+	}
+
+	// Strip emoji's en spaties van een string voor matching
+	stripForMatching(name: string): string {
+		return name
+			.replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // Remove emoji's
+			.replace(/[\u{2600}-\u{26FF}]/gu, '')   // Remove misc symbols
+			.replace(/[\u{2700}-\u{27BF}]/gu, '')   // Remove dingbats
+			.replace(/\s+/g, '')                     // Remove spaces
+			.toLowerCase();
+	}
+
+	// Extract project from content and return {text, projectId}
+	extractProject(content: string): {text: string, projectId: string | null} {
+		this.log('[Taakje] extractProject input:', content);
+		this.log('[Taakje] Available projects:', this.projects);
+
+		let projectId: string | null = null;
+
+		// Zoek alle #projectname in de content
+		const result = content.replace(/#(\S+)/g, (match, projectName) => {
+			const cleanName = this.stripForMatching(projectName);
+			this.log('[Taakje] Found hashtag:', match, '-> looking for:', cleanName);
+			if (this.projects[cleanName]) {
+				projectId = this.projects[cleanName]; // Dit is nu de project ID
+				this.log('[Taakje] Match found! Project ID:', projectId);
+				return ''; // Verwijder de hashtag uit de tekst
+			}
+			this.log('[Taakje] No match found for:', cleanName);
+			return match; // Behoud onbekende hashtags
+		}).replace(/\s+/g, ' ').trim(); // Clean up extra spaces
+
+		this.log('[Taakje] extractProject output:', {text: result, projectId});
+		return {text: result, projectId};
+	}
+
+	// Haal de status van een Todoist task op
+	async getTodoistTaskStatus(taskId: string): Promise<boolean | null> {
+		const apiKey = this.settings.todoistApiKey;
+		if (!apiKey) return null;
+
+		this.log('[Taakje] 🔍 Checking Todoist task status for ID:', taskId);
+
+		try {
+			const response = await requestUrl({
+				url: `https://api.todoist.com/api/v1/tasks/${taskId}`,
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`
+				},
+				throw: false
+			});
+
+			this.log('[Taakje] 📡 API Response status:', response.status);
+
+			if (response.status === 200) {
+				const task = response.json;
+				this.log('[Taakje] 📋 Task data:', JSON.stringify(task, null, 2));
+				// API v1 gebruikt 'checked' voor completion status
+				const isCompleted = task.checked === true || task.is_completed === true;
+				this.log('[Taakje] ✅ Task ID:', taskId, '| checked:', task.checked, '| is_completed:', isCompleted);
+				return isCompleted;
+			} else if (response.status === 404) {
+				this.log('[Taakje] ❌ Task not found:', taskId);
+				return null;
+			} else {
+				this.log('[Taakje] ⚠️ Unexpected response:', response.status, response.text);
+			}
+			return null;
+		} catch (e) {
+			this.log('[Taakje] ❌ Error fetching task status:', e);
+			return null;
+		}
+	}
+
+	// Complete een Todoist task
+	async completeTodoistTask(taskId: string): Promise<boolean> {
+		const apiKey = this.settings.todoistApiKey;
+		if (!apiKey) return false;
+
+		this.log('[Taakje] ✅ Completing Todoist task:', taskId);
+
+		try {
+			const response = await requestUrl({
+				url: `https://api.todoist.com/api/v1/tasks/${taskId}/close`,
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`
+				},
+				throw: false
+			});
+
+			this.log('[Taakje] 📡 Close task response:', response.status);
+			if (response.status === 200 || response.status === 204) {
+				this.log('[Taakje] ✅ Task completed in Todoist');
+				return true;
+			}
+			this.log('[Taakje] ❌ Failed to complete task:', response.status);
+			return false;
+		} catch (e) {
+			this.log('[Taakje] ❌ Error completing task:', e);
+			return false;
+		}
+	}
+
+	// Heropen een Todoist task
+	async reopenTodoistTask(taskId: string): Promise<boolean> {
+		const apiKey = this.settings.todoistApiKey;
+		if (!apiKey) return false;
+
+		this.log('[Taakje] ⬜ Reopening Todoist task:', taskId);
+
+		try {
+			const response = await requestUrl({
+				url: `https://api.todoist.com/api/v1/tasks/${taskId}/reopen`,
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`
+				},
+				throw: false
+			});
+
+			this.log('[Taakje] 📡 Reopen task response:', response.status);
+			if (response.status === 200 || response.status === 204) {
+				this.log('[Taakje] ⬜ Task reopened in Todoist');
+				return true;
+			}
+			this.log('[Taakje] ❌ Failed to reopen task:', response.status);
+			return false;
+		} catch (e) {
+			this.log('[Taakje] ❌ Error reopening task:', e);
+			return false;
+		}
+	}
+
+	async createTodoistTask(content: string, obsidianLink: string, parentId: string | null = null): Promise<string | null> {
+		const apiKey = this.settings.todoistApiKey;
+		if (!apiKey) return null;
+
+		// Extract project from content
+		const {text, projectId} = this.extractProject(content);
+		let taskContent = text;
+
+		// Voeg label toe als setting aan staat
+		if (this.settings.addObsidianLabel) {
+			const labelName = this.settings.obsidianLabel || 'obsidian';
+			taskContent = taskContent + ` @${labelName}`;
+		}
+
+		// Gebruik default project als geen project gevonden
+		const finalProjectId = projectId || this.settings.defaultProject || null;
+
+		this.log('[Taakje] Creating task:', taskContent);
+		this.log('[Taakje]    -> Project ID:', finalProjectId);
+		this.log('[Taakje]    -> Parent ID:', parentId);
+
+		try {
+			// Step 1: Create task via REST API (niet Quick Add) zodat we parent_id direct kunnen meegeven
+			const taskBody: Record<string, unknown> = {
+				content: taskContent,
+				description: obsidianLink ? `[Open in Obsidian](${obsidianLink})` : undefined
+			};
+
+			// Als het een subtaak is, gebruik parent_id
+			if (parentId) {
+				taskBody.parent_id = parentId;
+				this.log('[Taakje] Creating as SUBTASK with parent_id:', parentId);
+			} else if (finalProjectId) {
+				// Als het een hoofdtaak is, gebruik project_id
+				taskBody.project_id = finalProjectId;
+				this.log('[Taakje] Creating as MAIN TASK in project:', finalProjectId);
+			}
+
+			const response = await requestUrl({
+				url: 'https://api.todoist.com/api/v1/tasks',
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify(taskBody),
+				throw: false
+			});
+
+			this.log('[Taakje] Create task response:', response.status, response.json);
+			if (response.status !== 200 && response.status !== 201) {
+				this.log('[Taakje] ❌ Failed to create task:', response.status, response.text);
+				return null;
+			}
+			const task = response.json;
+			this.log('[Taakje] ✅ Created Todoist task:', task.id, 'parent_id:', task.parent_id);
+
+			return task.id;
+		} catch (e) {
+			this.log('[Taakje] ❌ Error creating task:', e);
+			return null;
+		}
+	}
+
+	async processCurrentFile() {
+		const file = this.app.workspace.getActiveFile();
+		if (!file) {
+			this.log('[Taakje] No active file');
+			return;
+		}
+
+		// Fetch projects voor correcte casing
+		await this.fetchProjects();
+
+		const content = await this.app.vault.read(file);
+		const lines = content.split('\n');
+		let modified = false;
+
+		// Regex voor todo items: - [ ] of - [x] met indentatie capture
+		const taskRegex = /^(\s*)-\s*\[([ xX])\]\s*(.*)$/;
+		// Regex voor Todoist link: [Todoist](https://app.todoist.com/app/task/task-ID)
+		const todoistLinkRegex = /\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/([^\)]+)\)/;
+
+		const tasks: Array<{lineIndex: number, indent: number, completed: boolean, text: string, todoistId: string | null, parentIndex: number | null}> = [];
+
+		lines.forEach((line, index) => {
+			const match = line.match(taskRegex);
+			if (match && match[1] !== undefined && match[2] && match[3]) {
+				const indent = match[1].length; // Aantal spaties/tabs voor indentatie
+				const taskText = match[3].trim();
+				const todoistMatch = taskText.match(todoistLinkRegex);
+				tasks.push({
+					lineIndex: index,
+					indent: indent,
+					completed: match[2].toLowerCase() === 'x',
+					text: taskText,
+					todoistId: todoistMatch && todoistMatch[1] ? todoistMatch[1] : null,
+					parentIndex: null // Wordt later bepaald
+				});
+			}
+		});
+
+		// Bepaal parent-child relaties op basis van indentatie
+		for (let i = 0; i < tasks.length; i++) {
+			const task = tasks[i];
+			if (task && task.indent > 0) {
+				// Zoek de parent task (eerste task met minder indentatie erboven)
+				for (let j = i - 1; j >= 0; j--) {
+					const parentTask = tasks[j];
+					if (parentTask && parentTask.indent < task.indent) {
+						task.parentIndex = j;
+						break;
+					}
+				}
+			}
+		}
+
+		this.log('[Taakje] 📄 File:', file.path);
+		this.log('[Taakje] 📋 Found', tasks.length, 'tasks:');
+
+		for (const task of tasks) {
+			const status = task.completed ? '✅' : '⬜';
+
+			if (task.todoistId) {
+				this.log(`[Taakje]   ${status} Line ${task.lineIndex + 1}: ${task.text}`);
+				this.log(`[Taakje]      🔗 ${task.todoistId}`);
+
+				// Check Todoist task status en sync naar Obsidian
+				const todoistCompleted = await this.getTodoistTaskStatus(task.todoistId);
+				this.log(`[Taakje]      📊 Todoist completed: ${todoistCompleted}, Obsidian completed: ${task.completed}`);
+
+				if (todoistCompleted !== null) {
+					// Als Todoist completed is maar Obsidian niet -> mark as done
+					if (todoistCompleted && !task.completed) {
+						const currentLine = lines[task.lineIndex];
+						this.log(`[Taakje]      📝 Current line: "${currentLine}"`);
+						if (currentLine) {
+							const newLine = currentLine.replace(/- \[ \]/, '- [x]');
+							this.log(`[Taakje]      📝 New line: "${newLine}"`);
+							lines[task.lineIndex] = newLine;
+							modified = true;
+							this.log(`[Taakje]      ✅ Marked as completed in Obsidian (synced from Todoist)`);
+						}
+					}
+					// Als Todoist niet completed is maar Obsidian wel -> mark as open
+					else if (!todoistCompleted && task.completed) {
+						const currentLine = lines[task.lineIndex];
+						this.log(`[Taakje]      📝 Current line: "${currentLine}"`);
+						if (currentLine) {
+							const newLine = currentLine.replace(/- \[[xX]\]/, '- [ ]');
+							this.log(`[Taakje]      📝 New line: "${newLine}"`);
+							lines[task.lineIndex] = newLine;
+							modified = true;
+							this.log(`[Taakje]      ⬜ Marked as open in Obsidian (synced from Todoist)`);
+						}
+					} else {
+						this.log(`[Taakje]      ℹ️ No change needed - status already in sync`);
+					}
+				}
+			} else {
+				// Geen Todoist link - maak nieuwe task aan via Quick Add
+				this.log(`[Taakje]   ${status} Line ${task.lineIndex + 1}: ${task.text}`);
+				this.log(`[Taakje]      ❌ No Todoist link - creating via Quick Add...`);
+				this.log(`[Taakje]      📊 Indent: ${task.indent}, Parent index: ${task.parentIndex}`);
+
+				// Obsidian URI link naar het bestand
+				const obsidianLink = `obsidian://open?vault=${encodeURIComponent(this.app.vault.getName())}&file=${encodeURIComponent(file.path)}`;
+
+				// Bepaal parent Todoist ID als dit een subtaak is
+				let parentTodoistId: string | null = null;
+				if (task.parentIndex !== null && task.parentIndex >= 0) {
+					const parentTask = tasks[task.parentIndex];
+					this.log(`[Taakje]      🔍 Looking for parent at index ${task.parentIndex}:`, parentTask);
+					if (parentTask && parentTask.todoistId) {
+						parentTodoistId = parentTask.todoistId;
+						this.log(`[Taakje]      👆 Parent Todoist ID: ${parentTodoistId}`);
+					} else {
+						this.log(`[Taakje]      ⚠️ Parent task has no Todoist ID yet`);
+					}
+				}
+
+				// Quick Add parseert automatisch #project, @labels, datums (today, tomorrow, etc.)
+				const todoistTaskId = await this.createTodoistTask(task.text, obsidianLink, parentTodoistId);
+
+				if (todoistTaskId) {
+					// Update de regel met de Todoist link
+					const currentLine = lines[task.lineIndex];
+					if (currentLine) {
+						const todoistLink = ` [Todoist](https://app.todoist.com/app/task/${todoistTaskId})`;
+						const newLine = currentLine + todoistLink;
+						lines[task.lineIndex] = newLine;
+						// Update ook de task in onze array zodat subtaken de juiste parent ID kunnen gebruiken
+						task.todoistId = todoistTaskId;
+						modified = true;
+						this.log(`[Taakje]      ✅ Added Todoist link: ${todoistTaskId}`);
+					}
+				}
+			}
+		}
+
+		// Schrijf wijzigingen terug naar bestand
+		this.log('[Taakje] 📝 Modified:', modified);
+		if (modified) {
+			const newContent = lines.join('\n');
+			this.log('[Taakje] 📝 Writing new content to file...');
+			this.log('[Taakje] 📝 New content preview (first 500 chars):', newContent.substring(0, 500));
+			try {
+				await this.app.vault.modify(file, newContent);
+				this.log('[Taakje] 💾 File updated successfully');
+				new Notice('Taakje: Tasks synced');
+			} catch (e) {
+				this.log('[Taakje] ❌ Error writing file:', e);
+				new Notice('Taakje: Error writing file');
+			}
+		} else {
+			this.log('[Taakje] ℹ️ No modifications needed');
+		}
+	}
+
+	onunload() {}
+
+	async loadSettings() {
+		this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData() as Partial<TaakjePluginSettings>) };
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
+	}
+}
+
