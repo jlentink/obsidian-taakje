@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-taakje-plugin",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "This isa plugin to sync todoist with Obsidian. (yet another)",
 	"main": "main.js",
 	"type": "module",
