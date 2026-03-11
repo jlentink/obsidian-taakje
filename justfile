@@ -1,14 +1,16 @@
 set shell := ["zsh", "-c"]
 
+version := `node -p "require('./package.json').version"`
+
 default:
 	@just --list
 
 showver:
-	@node -p "require('./package.json').version"
+	@echo {{version}}
 
 bump level="patch":
 	npm version {{level}}
-	@echo "Bumped version to v$$(node -p \"require('./package.json').version\")"
+	@echo Bumped version to v{{version}}
 
 patch:
 	just bump patch
@@ -21,7 +23,11 @@ major:
 
 tag:
 	git push
-	git push origin v$$(node -p "require('./package.json').version")
+	@if git ls-remote --exit-code --tags origin v{{version}} >/dev/null 2>&1; then \
+		echo "Tag v{{version}} already exists on origin"; \
+	else \
+		git push origin v{{version}}; \
+	fi
 
 release level="patch":
 	just bump {{level}}
