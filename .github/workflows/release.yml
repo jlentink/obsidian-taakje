@@ -1,12 +1,15 @@
-name: Release on main
+name: Release on tag
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
 
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   release:
@@ -14,50 +17,44 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
 
       - name: Install deps
         run: npm ci
 
-      - name: Bump version and update manifest/versions
-        id: bump
+      - name: Validate and sync release version
+        id: version
         shell: bash
         run: |
           set -euo pipefail
 
-          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p \"require('./package.json').version\")"
 
-          # Bumps package.json version, runs version-bump.mjs (via npm version hook), and creates a git tag.
-          npm version patch -m "chore(release): v%s [skip ci]"
-
-          NEW_VERSION="$(node -p "require('./package.json').version")"
-          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # npm version already commits + tags package.json/package-lock.json.
-          # Add files modified by version-bump.mjs and amend release commit.
-          git add manifest.json versions.json || true
-          if ! git diff --cached --quiet; then
-            git commit --amend --no-edit
-            git tag -f "v${NEW_VERSION}"
+          if [[ "$TAG_VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "Tag version ($TAG_VERSION) does not match package.json version ($PACKAGE_VERSION)."
+            exit 1
           fi
 
-          git push origin HEAD:main --follow-tags
+          VERSION="$TAG_VERSION" node version-bump.mjs
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build plugin
+        run: npm run build
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ steps.bump.outputs.version }}" \
-            --title "v${{ steps.bump.outputs.version }}" \
+          gh release create "${GITHUB_REF_NAME}" \
+            main.js manifest.json styles.css versions.json \
+            --title "${GITHUB_REF_NAME}" \
             --generate-notes

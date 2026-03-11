@@ -141,6 +141,20 @@ After syncing, tasks look like this:
 
 ## 🤝 Contributing
 
+### Releasing
+
+Version tracking is tag-based and `package.json` is the source of truth.
+Before creating a release:
+
+1. Run `just patch`, `just minor`, or `just major` locally.
+2. Review and commit the updated `package.json`, `manifest.json`, and `versions.json`.
+3. Push the commit to `main` through your normal PR flow.
+4. Run `just tag` from the release commit, or use `just release patch|minor|major` for the full local flow.
+5. Use `just showver` any time you want to confirm the version that will be tagged.
+6. GitHub Actions will validate the tag, build the plugin, and publish the release assets.
+
+If the tag version does not match `package.json`, the release workflow will fail on purpose.
+
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 1. Fork the repository
