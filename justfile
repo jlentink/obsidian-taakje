@@ -26,7 +26,7 @@ tag:
 	@if git ls-remote --exit-code --tags origin v{{version}} >/dev/null 2>&1; then \
 		echo "Tag v{{version}} already exists on origin"; \
 	else \
-		git push origin v{{version}}; \
+		git tag v{{version}} && git push origin v{{version}}; \
 	fi
 
 release level="patch":
