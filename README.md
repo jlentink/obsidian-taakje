@@ -111,7 +111,7 @@ Use `#projectname` to assign tasks to specific Todoist projects. Taakje matches 
 |---------------|------------------------|
 | `#inbox` | Inbox |
 | `#work` | 💼 Work |
-| `#ahold` | 🛒 Ahold |
+| `#boodschappen` | 🛒 Boodshappen |
 
 ### Subtasks
 
