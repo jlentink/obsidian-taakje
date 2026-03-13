@@ -95,7 +95,7 @@ Write tasks in your markdown files using standard checkbox syntax:
 ```markdown
 - [ ] Buy groceries today #shopping
 - [ ] Call mom tomorrow !!1
-- [ ] Review document @work #ahold
+- [ ] Review document #work
 ```
 
 ### Syncing Tasks
