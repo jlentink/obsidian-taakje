@@ -175,6 +175,16 @@ export class TaakjeSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
+			.setName('Ignore empty tasks')
+			.setDesc('Skip tasks that are empty or only contain "..." when syncing to Todoist')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.ignoreEmptyTasks)
+				.onChange(async (value) => {
+					this.plugin.settings.ignoreEmptyTasks = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
 			.setName('Debug mode')
 			.setDesc('Show debug messages in the console')
 			.addToggle(toggle => toggle
@@ -241,6 +251,19 @@ export default class TaakjePlugin extends Plugin {
 			// Fallback to settings
 			return this.settings.todoistApiKey;
 		}
+	}
+
+	// Check if a task should be ignored (empty or only contains "...")
+	shouldIgnoreTask(taskText: string): boolean {
+		if (!this.settings.ignoreEmptyTasks) {
+			return false;
+		}
+
+		// Remove Todoist link from text for checking
+		const textWithoutLink = taskText.replace(/\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/[^\)]+\)/g, '').trim();
+
+		// Check if empty or only contains "..."
+		return textWithoutLink === '' || textWithoutLink === '...';
 	}
 
 	async onload() {
@@ -762,6 +785,13 @@ export default class TaakjePlugin extends Plugin {
 			} else {
 				// Geen Todoist link - maak nieuwe task aan via Quick Add
 				this.log(`[Taakje]   ${status} Line ${task.lineIndex + 1}: ${task.text}`);
+
+				// Check if task should be ignored (empty or only "...")
+				if (this.shouldIgnoreTask(task.text)) {
+					this.log(`[Taakje]      ⏭️ Skipping empty/placeholder task (setting enabled)`);
+					continue;
+				}
+
 				this.log(`[Taakje]      ❌ No Todoist link - creating via Quick Add...`);
 				this.log(`[Taakje]      📊 Indent: ${task.indent}, Parent index: ${task.parentIndex}`);
 
