@@ -32,3 +32,7 @@ tag:
 release level="patch":
 	just bump {{level}}
 	just tag
+
+build:
+  npm install
+  npm run build

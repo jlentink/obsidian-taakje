@@ -135,24 +135,6 @@ export class TaakjeSettingTab extends PluginSettingTab {
 				});
 		}
 
-		new Setting(containerEl)
-			.setName('Sync interval')
-			.setDesc('How often to sync tasks from Todoist to Obsidian')
-			.addDropdown((dropdown: DropdownComponent) => {
-				dropdown.addOptions({
-					'1': '1 minute',
-					'5': '5 minutes',
-					'10': '10 minutes',
-					'15': '15 minutes',
-					'30': '30 minutes',
-					'60': '1 hour'
-				});
-				dropdown.setValue(String(this.plugin.settings.syncInterval ?? 5));
-				dropdown.onChange(async (value) => {
-					this.plugin.settings.syncInterval = parseInt(value);
-					await this.plugin.saveSettings();
-				});
-			});
 
 		new Setting(containerEl)
 			.setName('Add Obsidian label')
@@ -206,7 +188,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 
 export default class TaakjePlugin extends Plugin {
 	settings: TaakjePluginSettings;
-	projects: Record<string, string> = {}; // clean name -> project ID
+	projects: Record<string, {id: string, name: string}> = {}; // clean name -> {project ID, exact name}
 
 	// Debug log helper - alleen loggen als debug mode aan staat
 	log(...args: unknown[]) {
@@ -400,14 +382,14 @@ export default class TaakjePlugin extends Plugin {
 			if (response.status !== 200) return;
 			const json = response.json;
 			const raw = Array.isArray(json) ? json : (json?.results ?? []);
-			const data = raw as Array<{id: string, name: string}>;
-			this.projects = {};
-			for (const p of data) {
-				// Strip emoji's en spaties, lowercase voor matching -> project ID
-				const cleanName = this.stripForMatching(p.name);
-				this.projects[cleanName] = p.id; // clean name -> project ID
-				this.log('[Taakje] Added project:', cleanName, '->', p.id, '(', p.name, ')');
-			}
+		const data = raw as Array<{id: string, name: string}>;
+		this.projects = {};
+		for (const p of data) {
+			// Strip emoji's en spaties, lowercase voor matching -> store both ID and exact name
+			const cleanName = this.stripForMatching(p.name);
+			this.projects[cleanName] = {id: p.id, name: p.name}; // clean name -> {id, exact name}
+			this.log('[Taakje] Added project:', cleanName, '->', p.id, '(', p.name, ')');
+		}
 			this.log('[Taakje] Total projects loaded:', Object.keys(this.projects).length);
 		} catch (e) {
 			this.log('[Taakje] Error fetching projects:', e);
@@ -424,28 +406,31 @@ export default class TaakjePlugin extends Plugin {
 			.toLowerCase();
 	}
 
-	// Extract project from content and return {text, projectId}
-	extractProject(content: string): {text: string, projectId: string | null} {
+	// Extract project from content and return {text, projectId, projectName}
+	extractProject(content: string): {text: string, projectId: string | null, projectName: string | null} {
 		this.log('[Taakje] extractProject input:', content);
 		this.log('[Taakje] Available projects:', this.projects);
 
 		let projectId: string | null = null;
+		let projectName: string | null = null;
 
 		// Zoek alle #projectname in de content
-		const result = content.replace(/#(\S+)/g, (match, projectName) => {
-			const cleanName = this.stripForMatching(projectName);
+		const result = content.replace(/#(\S+)/g, (match, projectNameParam) => {
+			const cleanName = this.stripForMatching(projectNameParam);
 			this.log('[Taakje] Found hashtag:', match, '-> looking for:', cleanName);
 			if (this.projects[cleanName]) {
-				projectId = this.projects[cleanName]; // Dit is nu de project ID
-				this.log('[Taakje] Match found! Project ID:', projectId);
-				return ''; // Verwijder de hashtag uit de tekst
+				projectId = this.projects[cleanName].id;
+				projectName = this.projects[cleanName].name;
+				this.log('[Taakje] Match found! Project ID:', projectId, 'Name:', projectName);
+				// Verwijder de #project hashtag uit de tekst
+				return '';
 			}
 			this.log('[Taakje] No match found for:', cleanName);
 			return match; // Behoud onbekende hashtags
 		}).replace(/\s+/g, ' ').trim(); // Clean up extra spaces
 
-		this.log('[Taakje] extractProject output:', {text: result, projectId});
-		return {text: result, projectId};
+		this.log('[Taakje] extractProject output:', {text: result, projectId, projectName});
+		return {text: result, projectId, projectName};
 	}
 
 	// Haal de status van een Todoist task op
@@ -552,7 +537,7 @@ export default class TaakjePlugin extends Plugin {
 		if (!apiKey) return null;
 
 		// Extract project from content
-		const {text, projectId} = this.extractProject(content);
+		const {text, projectId, projectName} = this.extractProject(content);
 		let taskContent = text;
 
 		// Voeg label toe als setting aan staat
@@ -566,27 +551,18 @@ export default class TaakjePlugin extends Plugin {
 
 		this.log('[Taakje] Creating task:', taskContent);
 		this.log('[Taakje]    -> Project ID:', finalProjectId);
+		this.log('[Taakje]    -> Project Name:', projectName);
 		this.log('[Taakje]    -> Parent ID:', parentId);
 
 		try {
-			// Step 1: Create task via REST API (niet Quick Add) zodat we parent_id direct kunnen meegeven
+			// Step 1: Create task via Quick Add API (supports natural language parsing)
+			// De taskContent bevat nu de exacte #projectnaam voor Quick Add
 			const taskBody: Record<string, unknown> = {
-				content: taskContent,
-				description: obsidianLink ? `[Open in Obsidian](${obsidianLink})` : undefined
+				text: taskContent
 			};
 
-			// Als het een subtaak is, gebruik parent_id
-			if (parentId) {
-				taskBody.parent_id = parentId;
-				this.log('[Taakje] Creating as SUBTASK with parent_id:', parentId);
-			} else if (finalProjectId) {
-				// Als het een hoofdtaak is, gebruik project_id
-				taskBody.project_id = finalProjectId;
-				this.log('[Taakje] Creating as MAIN TASK in project:', finalProjectId);
-			}
-
 			const response = await requestUrl({
-				url: 'https://api.todoist.com/api/v1/tasks',
+				url: 'https://api.todoist.com/api/v1/tasks/quick',
 				method: 'POST',
 				headers: {
 					'Authorization': `Bearer ${apiKey}`,
@@ -596,15 +572,92 @@ export default class TaakjePlugin extends Plugin {
 				throw: false
 			});
 
-			this.log('[Taakje] Create task response:', response.status, response.json);
-			if (response.status !== 200 && response.status !== 201) {
-				this.log('[Taakje] ❌ Failed to create task:', response.status, response.text);
-				return null;
-			}
-			const task = response.json;
-			this.log('[Taakje] ✅ Created Todoist task:', task.id, 'parent_id:', task.parent_id);
+		this.log('[Taakje] Create task response:', response.status, response.json);
+		if (response.status !== 200 && response.status !== 201) {
+			this.log('[Taakje] ❌ Failed to create task:', response.status, response.text);
+			return null;
+		}
+		const task = response.json;
+		this.log('[Taakje] ✅ Created Todoist task:', task.id, 'parent_id:', task.parent_id);
 
-			return task.id;
+		// Step 2: Update task with description via v1 API
+		const updateBody: Record<string, unknown> = {};
+
+		if (obsidianLink) {
+			// Set description with Obsidian link
+			updateBody.description = `[📝 Obsidian link](${obsidianLink})`;
+			this.log('[Taakje] Setting description with Obsidian link');
+		}
+
+		if (Object.keys(updateBody).length > 0) {
+			this.log(`[Taakje] Update body for ${task.id}:`, updateBody);
+			const updateResponse = await requestUrl({
+				url: `https://api.todoist.com/api/v1/tasks/${task.id}`,
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify(updateBody),
+				throw: false
+			});
+
+			this.log('[Taakje] Update task response:', updateResponse.status);
+			if (updateResponse.status !== 200 && updateResponse.status !== 204) {
+				this.log('[Taakje] ⚠️ Warning: Failed to update task metadata:', updateResponse.status, updateResponse.text);
+			} else {
+				this.log('[Taakje] ✅ Updated task metadata successfully');
+			}
+		}
+
+		// Step 3: Move task via /move endpoint
+		if (parentId) {
+			// Move task to parent (make it a subtask)
+			this.log('[Taakje] Moving task to parent_id:', parentId);
+			const moveResponse = await requestUrl({
+				url: `https://api.todoist.com/api/v1/tasks/${task.id}/move`,
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					parent_id: parentId
+				}),
+				throw: false
+			});
+
+			this.log('[Taakje] Move task to parent response:', moveResponse.status);
+			if (moveResponse.status !== 200 && moveResponse.status !== 204) {
+				this.log('[Taakje] ⚠️ Warning: Failed to move task to parent:', moveResponse.status, moveResponse.text);
+			} else {
+				this.log('[Taakje] ✅ Task moved to parent successfully');
+			}
+		} else if (finalProjectId) {
+			// Move task to project (only for main tasks, not subtasks)
+			this.log('[Taakje] Moving task to project_id:', finalProjectId);
+			const moveResponse = await requestUrl({
+				url: `https://api.todoist.com/api/v1/tasks/${task.id}/move`,
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					project_id: finalProjectId
+				}),
+				throw: false
+			});
+
+			this.log('[Taakje] Move task to project response:', moveResponse.status);
+			if (moveResponse.status !== 200 && moveResponse.status !== 204) {
+				this.log('[Taakje] ⚠️ Warning: Failed to move task to project:', moveResponse.status, moveResponse.text);
+			} else {
+				this.log('[Taakje] ✅ Task moved to project successfully');
+			}
+		}
+
+		return task.id;
 		} catch (e) {
 			this.log('[Taakje] ❌ Error creating task:', e);
 			return null;
@@ -713,7 +766,8 @@ export default class TaakjePlugin extends Plugin {
 				this.log(`[Taakje]      📊 Indent: ${task.indent}, Parent index: ${task.parentIndex}`);
 
 				// Obsidian URI link naar het bestand
-				const obsidianLink = `obsidian://open?vault=${encodeURIComponent(this.app.vault.getName())}&file=${encodeURIComponent(file.path)}`;
+				const vaultName = this.app.vault.getName();
+				const obsidianLink = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(file.path)}`;
 
 				// Bepaal parent Todoist ID als dit een subtaak is
 				let parentTodoistId: string | null = null;
