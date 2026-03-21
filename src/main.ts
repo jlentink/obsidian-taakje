@@ -94,7 +94,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Todoist API key')
-			.setDesc('Select a secret from SecretStorage')
+			.setDesc('Select a secret from secret storage')
 			.addComponent(el => new SecretComponent(this.app, el)
 				.setValue(this.plugin.settings.todoistApiKeySecretId || '')
 				.onChange(async (value) => {
@@ -103,7 +103,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Test Todoist connection')
+			.setName('Test connection')
 			.setDesc('Verify your API key and fetch projects')
 			.addButton((button: ButtonComponent) => {
 				button.setButtonText('Test connection').onClick(async () => {
@@ -124,7 +124,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 		if (Object.keys(this.projects).length > 0) {
 			new Setting(containerEl)
 				.setName('Default project')
-				.setDesc('Select the default Todoist project for new tasks')
+				.setDesc('Select the default project for new tasks')
 				.addDropdown((dropdown: DropdownComponent) => {
 					dropdown.addOptions(this.projects);
 					dropdown.setValue(this.plugin.settings.defaultProject || '');
@@ -151,7 +151,7 @@ export class TaakjeSettingTab extends PluginSettingTab {
 			if (Object.keys(this.labels).length > 0) {
 				new Setting(containerEl)
 					.setName('Obsidian label name')
-					.setDesc('Select a label from your Todoist labels')
+					.setDesc('Select a label from your labels')
 					.addDropdown((dropdown: DropdownComponent) => {
 						dropdown.addOptions(this.labels);
 						dropdown.setValue(this.plugin.settings.obsidianLabel || 'obsidian');
@@ -193,7 +193,7 @@ export default class TaakjePlugin extends Plugin {
 	// Debug log helper - alleen loggen als debug mode aan staat
 	log(...args: unknown[]) {
 		if (this.settings?.debug === true) {
-			console.log(...args);
+			console.debug(...args);
 		}
 	}
 
@@ -257,7 +257,7 @@ export default class TaakjePlugin extends Plugin {
 		});
 
 		// Ribbon icon in de linker balk
-		this.addRibbonIcon('check-square', 'Taakje: Process file', async () => {
+		this.addRibbonIcon('check-square', 'Process file', async () => {
 			await this.processCurrentFile();
 		});
 
@@ -306,7 +306,7 @@ export default class TaakjePlugin extends Plugin {
 					const newLines = content.split('\n');
 
 					const taskRegex = /^(\s*)-\s*\[([ xX])\]\s*(.*)$/;
-					const todoistLinkRegex = /\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/([^\)]+)\)/;
+ 					const todoistLinkRegex = /\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/([^)]+)\)/;
 
 					for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
 						const oldLine = oldLines[i] || '';
@@ -337,16 +337,16 @@ export default class TaakjePlugin extends Plugin {
 									// Update Todoist als we een ID hebben
 									if (todoistId) {
 										if (newCompleted) {
-											const success = await this.completeTodoistTask(todoistId);
-											if (success) {
-												new Notice('Taakje: Task completed in Todoist');
-											}
-										} else {
-											const success = await this.reopenTodoistTask(todoistId);
-											if (success) {
-												new Notice('Taakje: Task reopened in Todoist');
-											}
-										}
+								const success = await this.completeTodoistTask(todoistId);
+								if (success) {
+									new Notice('Task completed');
+								}
+							} else {
+								const success = await this.reopenTodoistTask(todoistId);
+								if (success) {
+									new Notice('Task reopened');
+								}
+							}
 									}
 								}
 							}
@@ -359,14 +359,16 @@ export default class TaakjePlugin extends Plugin {
 			})
 		);
 
-		// Initialize previous content for active file
-		const activeFile = this.app.workspace.getActiveFile();
-		if (activeFile) {
-			this.app.vault.read(activeFile).then(content => {
-				previousContent[activeFile.path] = content;
-			});
-		}
+	// Initialize previous content for active file
+	const activeFile = this.app.workspace.getActiveFile();
+	if (activeFile) {
+		this.app.vault.read(activeFile).then(content => {
+			previousContent[activeFile.path] = content;
+		}).catch(() => {
+			// Ignore errors during initial load
+		});
 	}
+}
 
 	async fetchProjects(): Promise<void> {
 		const apiKey = await this.getApiKey();
@@ -690,10 +692,10 @@ export default class TaakjePlugin extends Plugin {
 		const lines = content.split('\n');
 		let modified = false;
 
-		// Regex voor todo items: - [ ] of - [x] met indentatie capture
-		const taskRegex = /^(\s*)-\s*\[([ xX])\]\s*(.*)$/;
-		// Regex voor Todoist link: [Todoist](https://app.todoist.com/app/task/task-ID)
-		const todoistLinkRegex = /\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/([^\)]+)\)/;
+	// Regex voor todo items: - [ ] of - [x] met indentatie capture
+	const taskRegex = /^(\s*)-\s*\[([ xX])\]\s*(.*)$/;
+	// Regex voor Todoist link: [Todoist](https://app.todoist.com/app/task/task-ID)
+	const todoistLinkRegex = /\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/([^)]+)\)/;
 
 		const tasks: Array<{lineIndex: number, indent: number, completed: boolean, text: string, todoistId: string | null, parentIndex: number | null}> = [];
 
@@ -822,10 +824,10 @@ export default class TaakjePlugin extends Plugin {
 			try {
 				await this.app.vault.modify(file, newContent);
 				this.log('[Taakje] 💾 File updated successfully');
-				new Notice('Taakje: Tasks synced');
+				new Notice('Tasks synced');
 			} catch (e) {
 				this.log('[Taakje] ❌ Error writing file:', e);
-				new Notice('Taakje: Error writing file');
+				new Notice('Error writing file');
 			}
 		} else {
 			this.log('[Taakje] ℹ️ No modifications needed');
