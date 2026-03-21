@@ -9,7 +9,7 @@ showver:
 	@echo {{version}}
 
 bump level="patch":
-	npm version {{level}}
+	npm version {{level}} --tag-version-prefix=""
 	@echo Bumped version to {{version}}
 
 patch:
