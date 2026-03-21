@@ -175,16 +175,6 @@ export class TaakjeSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName('Ignore empty tasks')
-			.setDesc('Skip tasks that are empty or only contain "..." when syncing to Todoist')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.ignoreEmptyTasks)
-				.onChange(async (value) => {
-					this.plugin.settings.ignoreEmptyTasks = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
 			.setName('Debug mode')
 			.setDesc('Show debug messages in the console')
 			.addToggle(toggle => toggle
@@ -251,19 +241,6 @@ export default class TaakjePlugin extends Plugin {
 			// Fallback to settings
 			return this.settings.todoistApiKey;
 		}
-	}
-
-	// Check if a task should be ignored (empty or only contains "...")
-	shouldIgnoreTask(taskText: string): boolean {
-		if (!this.settings.ignoreEmptyTasks) {
-			return false;
-		}
-
-		// Remove Todoist link from text for checking
-		const textWithoutLink = taskText.replace(/\[Todoist\]\(https:\/\/app\.todoist\.com\/app\/task\/[^\)]+\)/g, '').trim();
-
-		// Check if empty or only contains "..."
-		return textWithoutLink === '' || textWithoutLink === '...';
 	}
 
 	async onload() {
@@ -555,7 +532,7 @@ export default class TaakjePlugin extends Plugin {
 		}
 	}
 
-	async createTodoistTask(content: string, obsidianLink: string, parentId: string | null = null): Promise<string | null> {
+	async createTodoistTask(content: string, obsidianLink: string, parentId: string | null = null, isCompleted: boolean = false): Promise<string | null> {
 		const apiKey = await this.getApiKey();
 		if (!apiKey) return null;
 
@@ -576,6 +553,7 @@ export default class TaakjePlugin extends Plugin {
 		this.log('[Taakje]    -> Project ID:', finalProjectId);
 		this.log('[Taakje]    -> Project Name:', projectName);
 		this.log('[Taakje]    -> Parent ID:', parentId);
+		this.log('[Taakje]    -> Is Completed:', isCompleted);
 
 		try {
 			// Step 1: Create task via Quick Add API (supports natural language parsing)
@@ -677,6 +655,17 @@ export default class TaakjePlugin extends Plugin {
 				this.log('[Taakje] ⚠️ Warning: Failed to move task to project:', moveResponse.status, moveResponse.text);
 			} else {
 				this.log('[Taakje] ✅ Task moved to project successfully');
+			}
+		}
+
+		// Step 4: Mark task as completed in Todoist if it was already completed in Obsidian
+		if (isCompleted) {
+			this.log('[Taakje] Task is already completed in Obsidian, marking as done in Todoist');
+			const completionSuccess = await this.completeTodoistTask(task.id);
+			if (completionSuccess) {
+				this.log('[Taakje] ✅ Task marked as completed in Todoist');
+			} else {
+				this.log('[Taakje] ⚠️ Warning: Failed to mark task as completed in Todoist');
 			}
 		}
 
@@ -785,13 +774,6 @@ export default class TaakjePlugin extends Plugin {
 			} else {
 				// Geen Todoist link - maak nieuwe task aan via Quick Add
 				this.log(`[Taakje]   ${status} Line ${task.lineIndex + 1}: ${task.text}`);
-
-				// Check if task should be ignored (empty or only "...")
-				if (this.shouldIgnoreTask(task.text)) {
-					this.log(`[Taakje]      ⏭️ Skipping empty/placeholder task (setting enabled)`);
-					continue;
-				}
-
 				this.log(`[Taakje]      ❌ No Todoist link - creating via Quick Add...`);
 				this.log(`[Taakje]      📊 Indent: ${task.indent}, Parent index: ${task.parentIndex}`);
 
@@ -813,7 +795,7 @@ export default class TaakjePlugin extends Plugin {
 				}
 
 				// Quick Add parseert automatisch #project, @labels, datums (today, tomorrow, etc.)
-				const todoistTaskId = await this.createTodoistTask(task.text, obsidianLink, parentTodoistId);
+				const todoistTaskId = await this.createTodoistTask(task.text, obsidianLink, parentTodoistId, task.completed);
 
 				if (todoistTaskId) {
 					// Update de regel met de Todoist link
