@@ -261,30 +261,30 @@ export default class TaakjePlugin extends Plugin {
 			await this.processCurrentFile();
 		});
 
-		// Luister naar checkbox changes met capture phase
-		this.registerDomEvent(document, 'change', async (event: Event) => {
-			const target = event.target as HTMLElement;
+	// Luister naar checkbox changes met capture phase
+	this.registerDomEvent(document, 'change', (event: Event) => {
+		const target = event.target as HTMLElement;
 
-			// Moet een checkbox input zijn
-			if (target.tagName !== 'INPUT') return;
-			if ((target as HTMLInputElement).type !== 'checkbox') return;
+		// Moet een checkbox input zijn
+		if (target.tagName !== 'INPUT') return;
+		if ((target as HTMLInputElement).type !== 'checkbox') return;
 
-			const checkbox = target as HTMLInputElement;
-			const isChecked = checkbox.checked;
-			const file = this.app.workspace.getActiveFile();
-			if (!file) return;
+		const checkbox = target as HTMLInputElement;
+		const isChecked = checkbox.checked;
+		const file = this.app.workspace.getActiveFile();
+		if (!file) return;
 
-			// Vind de task text in de parent element
-			const taskItem = target.closest('.task-list-item') || target.closest('li');
-			const taskText = taskItem?.textContent?.trim() || 'Unknown task';
+		// Vind de task text in de parent element
+		const taskItem = target.closest('.task-list-item') || target.closest('li');
+		const taskText = taskItem?.textContent?.trim() || 'Unknown task';
 
-			this.log('[Taakje] ═══════════════════════════════════════');
-			this.log('[Taakje] ☑️ CHECKBOX CHANGED (DOM)');
-			this.log('[Taakje] 📄 File:', file.path);
-			this.log('[Taakje] 📝 Task:', taskText);
-			this.log('[Taakje] 🔄 Changed to:', isChecked ? 'COMPLETED ✅' : 'OPEN ⬜');
-			this.log('[Taakje] ═══════════════════════════════════════');
-		}, true); // capture phase
+		this.log('[Taakje] ═══════════════════════════════════════');
+		this.log('[Taakje] ☑️ CHECKBOX CHANGED (DOM)');
+		this.log('[Taakje] 📄 File:', file.path);
+		this.log('[Taakje] 📝 Task:', taskText);
+		this.log('[Taakje] 🔄 Changed to:', isChecked ? 'COMPLETED ✅' : 'OPEN ⬜');
+		this.log('[Taakje] ═══════════════════════════════════════');
+	}, true); // capture phase
 
 		// Backup: Luister naar file modifications en detecteer checkbox changes
 		let previousContent: Record<string, string> = {};
