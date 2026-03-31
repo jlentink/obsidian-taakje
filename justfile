@@ -41,3 +41,6 @@ lint:
 build: lint
   npm install
   npm run build
+
+install: build
+  cp main.js styles.css manifest.json ~/Documents/Obsidian\ Vault/.obsidian/plugins/taakje
