@@ -23,11 +23,12 @@ major:
 	just bump major
 
 tag:
+	version=$(node -p "require('./package.json').version")
 	git push
-	@if git ls-remote --exit-code --tags origin {{version}} >/dev/null 2>&1; then \
-		echo "Tag {{version}} already exists on origin"; \
+	@if git ls-remote --exit-code --tags origin ${version} >/dev/null 2>&1; then \
+		echo "Tag ${version} already exists on origin"; \
 	else \
-		git tag -f {{version}} && git push origin {{version}}; \
+		git tag -f ${version} && git push origin ${version}; \
 	fi
 
 release level="patch": lint
