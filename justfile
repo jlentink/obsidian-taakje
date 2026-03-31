@@ -10,7 +10,8 @@ showver:
 
 bump level="patch":
 	npm version {{level}} --tag-version-prefix=""
-	@echo Bumped version to {{version}}
+	version=$(node -p "require('./package.json').version")
+	@echo Bumped version to ${version}
 
 patch:
 	just bump patch
