@@ -1,5 +1,35 @@
-import {App, Plugin, PluginSettingTab, Setting, ButtonComponent, DropdownComponent, requestUrl, Notice, SecretComponent} from 'obsidian';
+import {App, Plugin, PluginSettingTab, Setting, ButtonComponent, DropdownComponent, requestUrl, Notice, SecretComponent, AbstractInputSuggest} from 'obsidian';
 import {DEFAULT_SETTINGS, TaakjePluginSettings} from "./settings";
+
+class FolderSuggest extends AbstractInputSuggest<string> {
+	private folders: string[];
+	private input: HTMLInputElement;
+
+	constructor(app: App, inputEl: HTMLInputElement) {
+		super(app, inputEl);
+		this.input = inputEl;
+		// Get all folders and include root folder
+		this.folders = ["/"].concat(this.app.vault.getAllFolders().map(folder => folder.path));
+	}
+
+	getSuggestions(inputStr: string): string[] {
+		const inputLower = inputStr.toLowerCase();
+		return this.folders.filter(folder =>
+			folder.toLowerCase().includes(inputLower)
+		);
+	}
+
+	renderSuggestion(folder: string, el: HTMLElement): void {
+		el.createEl("div", { text: folder });
+	}
+
+	selectSuggestion(folder: string): void {
+		this.input.value = folder;
+		const event = new Event('input');
+		this.input.dispatchEvent(event);
+		this.close();
+	}
+}
 
 export class TaakjeSettingTab extends PluginSettingTab {
 	plugin: TaakjePlugin;
@@ -131,6 +161,95 @@ export class TaakjeSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 				});
+
+			// Folder Rules section
+			new Setting(containerEl)
+				.setName('Folder rules')
+				.setHeading();
+
+			new Setting(containerEl)
+				.setDesc('Automatically assign projects based on file location. Rules apply to the folder and all its subfolders.');
+
+			// Display existing folder rules
+			this.plugin.settings.folderRules.forEach((rule, index) => {
+				new Setting(containerEl)
+					.setName(`Rule ${index + 1}`)
+					.setDesc(`📁 ${rule.folder || '(not set)'} → 🎯 ${this.projects[rule.projectId] || '(not set)'}`)
+					.addSearch(search => {
+						search
+							.setPlaceholder('Folder path (e.g., folder1/folder2)')
+							.setValue(rule.folder)
+							.onChange(async (value) => {
+								const ruleToUpdate = this.plugin.settings.folderRules[index];
+								if (ruleToUpdate) {
+									ruleToUpdate.folder = value;
+									await this.plugin.saveSettings();
+								}
+							});
+						new FolderSuggest(this.app, search.inputEl);
+					})
+					.addDropdown((dropdown: DropdownComponent) => {
+						dropdown.addOptions(this.projects);
+						dropdown.setValue(rule.projectId);
+						dropdown.onChange(async (value) => {
+							const ruleToUpdate = this.plugin.settings.folderRules[index];
+							if (ruleToUpdate) {
+								ruleToUpdate.projectId = value;
+								await this.plugin.saveSettings();
+							}
+						});
+					})
+					.addButton((button: ButtonComponent) => {
+						button.setButtonText('Delete')
+							.setWarning()
+							.onClick(async () => {
+								this.plugin.settings.folderRules.splice(index, 1);
+								await this.plugin.saveSettings();
+								this.display();
+							});
+					});
+			});
+
+			// Add new folder rule
+			let newFolderPath = '';
+			let newProjectId = '';
+
+			new Setting(containerEl)
+				.setName('Add new folder rule')
+				// .setDesc('Create a rule to automatically assign todos to a project based on their folder location')
+				.addSearch(search => {
+					search
+						.setPlaceholder('Folder path (e.g., folder1/folder2)')
+						.setValue('')
+						.onChange((value) => {
+							newFolderPath = value;
+						});
+					new FolderSuggest(this.app, search.inputEl);
+				})
+				.addDropdown((dropdown: DropdownComponent) => {
+					dropdown.addOptions(this.projects);
+					dropdown.setValue('');
+					dropdown.onChange((value) => {
+						newProjectId = value;
+					});
+				})
+				.addButton((button: ButtonComponent) => {
+					button.setButtonText('Add rule')
+						.setCta()
+						.onClick(async () => {
+							if (newFolderPath && newProjectId) {
+								this.plugin.settings.folderRules.push({
+									folder: newFolderPath,
+									projectId: newProjectId
+								});
+								await this.plugin.saveSettings();
+								this.display();
+								new Notice('Folder rule added');
+							} else {
+								new Notice('Please enter both folder path and project');
+							}
+						});
+				});
 		}
 
 
@@ -202,6 +321,99 @@ export class TaakjeSettingTab extends PluginSettingTab {
 					this.plugin.settings.debug = value;
 					await this.plugin.saveSettings();
 				}));
+
+		// Folder Rules section at the bottom, only if projects are loaded
+		if (Object.keys(this.projects).length > 0) {
+			// Create a container div for the folder rules section
+			const folderRulesContainer = containerEl.createDiv({ cls: 'taakje-folder-rules-container' });
+
+			new Setting(folderRulesContainer)
+				.setName('Folder rules')
+				.setHeading();
+
+			new Setting(folderRulesContainer)
+				.setDesc('Automatically assign projects based on file location. Rules apply to the folder and all its subfolders.');
+
+			// Display existing folder rules
+			this.plugin.settings.folderRules.forEach((rule, index) => {
+				new Setting(folderRulesContainer)
+					.setName(`Rule ${index + 1}`)
+					.setDesc(`📁 ${rule.folder || '(not set)'} → 🎯 ${this.projects[rule.projectId] || '(not set)'}`)
+					.addSearch(search => {
+						search
+							.setPlaceholder('Folder path (e.g., folder1/folder2)')
+							.setValue(rule.folder)
+							.onChange(async (value) => {
+								const ruleToUpdate = this.plugin.settings.folderRules[index];
+								if (ruleToUpdate) {
+									ruleToUpdate.folder = value;
+									await this.plugin.saveSettings();
+								}
+							});
+						new FolderSuggest(this.app, search.inputEl);
+					})
+					.addDropdown((dropdown: DropdownComponent) => {
+						dropdown.addOptions(this.projects);
+						dropdown.setValue(rule.projectId);
+						dropdown.onChange(async (value) => {
+							const ruleToUpdate = this.plugin.settings.folderRules[index];
+							if (ruleToUpdate) {
+								ruleToUpdate.projectId = value;
+								await this.plugin.saveSettings();
+							}
+						});
+					})
+					.addButton((button: ButtonComponent) => {
+						button.setButtonText('Delete')
+							.setWarning()
+							.onClick(async () => {
+								this.plugin.settings.folderRules.splice(index, 1);
+								await this.plugin.saveSettings();
+								this.display();
+							});
+					});
+			});
+
+			// Add new folder rule
+			let newFolderPath = '';
+			let newProjectId = '';
+
+			new Setting(folderRulesContainer)
+				.setName('Add new folder rule')
+				.addSearch(search => {
+					search
+						.setPlaceholder('Folder path (e.g., folder1/folder2)')
+						.setValue('')
+						.onChange((value) => {
+							newFolderPath = value;
+						});
+					new FolderSuggest(this.app, search.inputEl);
+				})
+				.addDropdown((dropdown: DropdownComponent) => {
+					dropdown.addOptions(this.projects);
+					dropdown.setValue('');
+					dropdown.onChange((value) => {
+						newProjectId = value;
+					});
+				})
+				.addButton((button: ButtonComponent) => {
+					button.setButtonText('Add rule')
+						.setCta()
+						.onClick(async () => {
+							if (newFolderPath && newProjectId) {
+								this.plugin.settings.folderRules.push({
+									folder: newFolderPath,
+									projectId: newProjectId
+								});
+								await this.plugin.saveSettings();
+								this.display();
+								new Notice('Folder rule added');
+							} else {
+								new Notice('Please enter both folder path and project');
+							}
+						});
+				});
+		}
 	}
 }
 
@@ -428,6 +640,38 @@ export default class TaakjePlugin extends Plugin {
 			.toLowerCase();
 	}
 
+	// Get project ID based on file path and folder rules
+	getProjectIdForFile(filePath: string): string | null {
+		if (!this.settings.folderRules || this.settings.folderRules.length === 0) {
+			return null;
+		}
+
+		// Normalize file path (remove leading/trailing slashes)
+		const normalizedFilePath = filePath.replace(/^\/+|\/+$/g, '');
+
+		// Find matching folder rules, prioritizing most specific (longest) paths
+		const matchingRules = this.settings.folderRules
+			.filter(rule => {
+				const normalizedRuleFolder = rule.folder.replace(/^\/+|\/+$/g, '');
+				// Check if file is in this folder or a subfolder
+				return normalizedFilePath.startsWith(normalizedRuleFolder + '/') ||
+				       normalizedFilePath.startsWith(normalizedRuleFolder) &&
+				       (normalizedFilePath === normalizedRuleFolder || normalizedFilePath[normalizedRuleFolder.length] === '/');
+			})
+			.sort((a, b) => b.folder.length - a.folder.length); // Sort by path length (most specific first)
+
+		if (matchingRules.length > 0) {
+			const rule = matchingRules[0];
+			if (rule) {
+				this.log('[Taakje] Found folder rule match:', rule.folder, '-> Project ID:', rule.projectId);
+				return rule.projectId;
+			}
+		}
+
+		this.log('[Taakje] No folder rule matched for path:', filePath);
+		return null;
+	}
+
 	// Extract project from content and return {text, projectId, projectName}
 	extractProject(content: string): {text: string, projectId: string | null, projectName: string | null} {
 		this.log('[Taakje] extractProject input:', content);
@@ -554,7 +798,7 @@ export default class TaakjePlugin extends Plugin {
 		}
 	}
 
-	async createTodoistTask(content: string, obsidianLink: string, parentId: string | null = null, isCompleted: boolean = false): Promise<string | null> {
+	async createTodoistTask(content: string, obsidianLink: string, filePath: string, parentId: string | null = null, isCompleted: boolean = false): Promise<string | null> {
 		const apiKey = await this.getApiKey();
 		if (!apiKey) return null;
 
@@ -568,10 +812,25 @@ export default class TaakjePlugin extends Plugin {
 			taskContent = taskContent + ` @${labelName}`;
 		}
 
-		// Gebruik default project als geen project gevonden
-		const finalProjectId = projectId || this.settings.defaultProject || null;
+		// Project priority: 1) Explicit #project in content, 2) Folder rule, 3) Default project
+		let finalProjectId = projectId;
+		if (!finalProjectId) {
+			// Check folder rules
+			const folderProjectId = this.getProjectIdForFile(filePath);
+			if (folderProjectId) {
+				finalProjectId = folderProjectId;
+				this.log('[Taakje]    -> Using folder rule project');
+			} else {
+				// Fall back to default project
+				finalProjectId = this.settings.defaultProject || null;
+				this.log('[Taakje]    -> Using default project');
+			}
+		} else {
+			this.log('[Taakje]    -> Using explicit project from content');
+		}
 
 		this.log('[Taakje] Creating task:', taskContent);
+		this.log('[Taakje]    -> File path:', filePath);
 		this.log('[Taakje]    -> Project ID:', finalProjectId);
 		this.log('[Taakje]    -> Project Name:', projectName);
 		this.log('[Taakje]    -> Parent ID:', parentId);
@@ -826,7 +1085,7 @@ export default class TaakjePlugin extends Plugin {
 				}
 
 				// Quick Add parseert automatisch #project, @labels, datums (today, tomorrow, etc.)
-				const todoistTaskId = await this.createTodoistTask(task.text, obsidianLink, parentTodoistId, task.completed);
+				const todoistTaskId = await this.createTodoistTask(task.text, obsidianLink, file.path, parentTodoistId, task.completed);
 
 				if (todoistTaskId) {
 					// Update de regel met de Todoist link
@@ -874,4 +1133,14 @@ export default class TaakjePlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 }
+
+
+
+
+
+
+
+
+
+
 
