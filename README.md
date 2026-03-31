@@ -81,6 +81,7 @@ npm run build
 |---------|-------------|
 | **Todoist API Key** | Your personal Todoist API token |
 | **Default Project** | Where tasks without a `#project` tag go |
+| **Folder Rules** | Assign projects automatically based on file location |
 | **Sync Interval** | How often to check Todoist for changes |
 | **Add Obsidian Label** | Automatically add a label to synced tasks |
 | **Label Name** | Custom label name (default: `obsidian`) |
@@ -112,6 +113,38 @@ Use `#projectname` to assign tasks to specific Todoist projects. Taakje matches 
 | `#inbox` | Inbox |
 | `#work` | 💼 Work |
 | `#boodschappen` | 🛒 Boodshappen |
+
+### Folder Rules
+
+Automatically assign tasks to projects based on the file's folder location. This is perfect for organizing work projects, personal areas, or different life domains.
+
+**How it works:**
+
+1. Go to **Settings → Taakje → Folder Rules**
+2. Enter a folder path and select a project
+3. Click "Add" to create the rule
+4. All tasks in that folder (and subfolders) will automatically use that project
+
+**Priority order for project assignment:**
+
+1. **Explicit `#project` tag in task** — always wins
+2. **Folder rule** — based on file location
+3. **Default project** — your fallback setting
+
+**Example:**
+
+If you have these folder rules:
+- `work/clients` → Client Projects
+- `work` → Work
+- `personal/health` → Health & Wellness
+
+Then tasks in:
+- `work/clients/acme/meeting-notes.md` → assigned to "Client Projects"
+- `work/planning.md` → assigned to "Work"
+- `personal/health/workout.md` → assigned to "Health & Wellness"
+- `random-notes.md` → assigned to your default project
+
+**Note:** More specific (longer) folder paths take priority over general ones.
 
 ### Subtasks
 
