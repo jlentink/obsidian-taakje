@@ -29,10 +29,13 @@ tag:
 		git tag -f {{version}} && git push origin {{version}}; \
 	fi
 
-release level="patch":
+release level="patch": lint
 	just bump {{level}}
 	just tag
 
-build:
+lint:
+  npx eslint src/*.ts
+
+build: lint
   npm install
   npm run build

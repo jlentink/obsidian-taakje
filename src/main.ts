@@ -22,12 +22,11 @@ export class TaakjeSettingTab extends PluginSettingTab {
 			});
 			this.plugin.log('[Taakje] Projects API response:', response.status, response.json);
 			if (response.status !== 200) return {};
-			const json = response.json;
+			const json = response.json as Array<{id: string, name: string}> | {results?: Array<{id: string, name: string}>};
 			// API v1 retourneert { results: [...] } of direct een array
-			const raw = Array.isArray(json) ? json : (json?.results ?? []);
-			const data = raw as Array<{id: string, name: string}>;
+			const raw = Array.isArray(json) ? json : (json.results ?? []);
 			const projects: Record<string, string> = {};
-			for (const p of data) projects[p.id] = p.name;
+			for (const p of raw) projects[p.id] = p.name;
 			this.plugin.log('[Taakje] Parsed projects:', projects);
 			return projects;
 		} catch (e) {
@@ -47,11 +46,10 @@ export class TaakjeSettingTab extends PluginSettingTab {
 			});
 			this.plugin.log('[Taakje] Labels API response:', response.status, response.json);
 			if (response.status !== 200) return {};
-			const json = response.json;
-			const raw = Array.isArray(json) ? json : (json?.results ?? []);
-			const data = raw as Array<{id: string, name: string}>;
+			const json = response.json as Array<{id: string, name: string}> | {results?: Array<{id: string, name: string}>};
+			const raw = Array.isArray(json) ? json : (json.results ?? []);
 			const labels: Record<string, string> = {};
-			for (const label of data) {
+			for (const label of raw) {
 				labels[label.name] = label.name;
 			}
 			this.plugin.log('[Taakje] Parsed labels:', labels);
@@ -175,6 +173,27 @@ export class TaakjeSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
+			.setName('Ignore empty tasks')
+			.setDesc('Skip tasks with no meaningful content')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.ignoreEmptyTasks)
+				.onChange(async (value) => {
+					this.plugin.settings.ignoreEmptyTasks = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Separator character')
+			.setDesc('Separator placed before the link, surrounded by spaces')
+			.addText(text => text
+				.setPlaceholder('|')
+				.setValue(this.plugin.settings.separatorChar || '|')
+				.onChange(async (value) => {
+					this.plugin.settings.separatorChar = value || '|';
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
 			.setName('Debug mode')
 			.setDesc('Show debug messages in the console')
 			.addToggle(toggle => toggle
@@ -193,6 +212,7 @@ export default class TaakjePlugin extends Plugin {
 	// Debug log helper - alleen loggen als debug mode aan staat
 	log(...args: unknown[]) {
 		if (this.settings?.debug === true) {
+			// eslint-disable-next-line no-undef
 			console.debug(...args);
 		}
 	}
@@ -262,6 +282,7 @@ export default class TaakjePlugin extends Plugin {
 		});
 
 	// Luister naar checkbox changes met capture phase
+	// eslint-disable-next-line no-undef
 	this.registerDomEvent(document, 'change', (event: Event) => {
 		const target = event.target as HTMLElement;
 
@@ -382,11 +403,10 @@ export default class TaakjePlugin extends Plugin {
 			});
 			this.log('[Taakje] fetchProjects response status:', response.status);
 			if (response.status !== 200) return;
-			const json = response.json;
-			const raw = Array.isArray(json) ? json : (json?.results ?? []);
-		const data = raw as Array<{id: string, name: string}>;
+			const json = response.json as Array<{id: string, name: string}> | {results?: Array<{id: string, name: string}>};
+			const raw = Array.isArray(json) ? json : (json.results ?? []);
 		this.projects = {};
-		for (const p of data) {
+		for (const p of raw) {
 			// Strip emoji's en spaties, lowercase voor matching -> store both ID and exact name
 			const cleanName = this.stripForMatching(p.name);
 			this.projects[cleanName] = {id: p.id, name: p.name}; // clean name -> {id, exact name}
@@ -417,7 +437,7 @@ export default class TaakjePlugin extends Plugin {
 		let projectName: string | null = null;
 
 		// Zoek alle #projectname in de content
-		const result = content.replace(/#(\S+)/g, (match, projectNameParam) => {
+		const result = content.replace(/#(\S+)/g, (match: string, projectNameParam: string) => {
 			const cleanName = this.stripForMatching(projectNameParam);
 			this.log('[Taakje] Found hashtag:', match, '-> looking for:', cleanName);
 			if (this.projects[cleanName]) {
@@ -455,7 +475,7 @@ export default class TaakjePlugin extends Plugin {
 			this.log('[Taakje] 📡 API Response status:', response.status);
 
 			if (response.status === 200) {
-				const task = response.json;
+				const task = response.json as {id: string, checked?: boolean, is_completed?: boolean};
 				this.log('[Taakje] 📋 Task data:', JSON.stringify(task, null, 2));
 				// API v1 gebruikt 'checked' voor completion status
 				const isCompleted = task.checked === true || task.is_completed === true;
@@ -580,7 +600,7 @@ export default class TaakjePlugin extends Plugin {
 			this.log('[Taakje] ❌ Failed to create task:', response.status, response.text);
 			return null;
 		}
-		const task = response.json;
+		const task = response.json as {id: string, parent_id?: string};
 		this.log('[Taakje] ✅ Created Todoist task:', task.id, 'parent_id:', task.parent_id);
 
 		// Step 2: Update task with description via v1 API
@@ -796,6 +816,15 @@ export default class TaakjePlugin extends Plugin {
 					}
 				}
 
+				// Ignore empty tasks if setting is enabled
+				if (this.settings.ignoreEmptyTasks) {
+					const cleanText = task.text.trim();
+					if (cleanText === '' || cleanText === '...') {
+						this.log(`[Taakje]      ⏭️ Skipping empty task`);
+						continue;
+					}
+				}
+
 				// Quick Add parseert automatisch #project, @labels, datums (today, tomorrow, etc.)
 				const todoistTaskId = await this.createTodoistTask(task.text, obsidianLink, parentTodoistId, task.completed);
 
@@ -803,7 +832,8 @@ export default class TaakjePlugin extends Plugin {
 					// Update de regel met de Todoist link
 					const currentLine = lines[task.lineIndex];
 					if (currentLine) {
-						const todoistLink = ` [Todoist](https://app.todoist.com/app/task/${todoistTaskId})`;
+						const sep = this.settings.separatorChar || '|';
+						const todoistLink = ` ${sep} [Todoist](https://app.todoist.com/app/task/${todoistTaskId})`;
 						const newLine = currentLine + todoistLink;
 						lines[task.lineIndex] = newLine;
 						// Update ook de task in onze array zodat subtaken de juiste parent ID kunnen gebruiken

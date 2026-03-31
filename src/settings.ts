@@ -4,6 +4,8 @@ export interface TaakjePluginSettings {
 	defaultProject: string | null;
 	addObsidianLabel: boolean;
 	obsidianLabel: string;
+	ignoreEmptyTasks: boolean;
+	separatorChar: string;
 	debug: boolean;
 }
 
@@ -13,6 +15,8 @@ export const DEFAULT_SETTINGS: TaakjePluginSettings = {
 	defaultProject: null,
 	addObsidianLabel: false,
 	obsidianLabel: 'obsidian',
+	ignoreEmptyTasks: true,
+	separatorChar: '|',
 	debug: false
 };
 
