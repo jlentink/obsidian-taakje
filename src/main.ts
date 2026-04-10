@@ -420,7 +420,8 @@ export default class TaakjePlugin extends Plugin {
 
 		// Vind de task text in de parent element
 		const taskItem = target.closest('.task-list-item') || target.closest('li');
-		const taskText = taskItem?.textContent?.trim() || 'Unknown task';
+		const rawTaskText = taskItem?.textContent?.trim() || 'Unknown task';
+		const taskText = this.getCleanTaskText(rawTaskText);
 
 		this.log('[Taakje] ═══════════════════════════════════════');
 		this.log('[Taakje] ☑️ CHECKBOX CHANGED (DOM)');
@@ -465,9 +466,11 @@ export default class TaakjePlugin extends Plugin {
 								const newCompleted = newMatch[2].toLowerCase() === 'x';
 
 								if (oldCompleted !== newCompleted) {
-									const taskText = newMatch[3].trim();
-									const todoistMatch = taskText.match(todoistLinkRegex);
+									const rawTaskText = newMatch[3].trim();
+									const taskText = this.getCleanTaskText(rawTaskText);
+									const todoistMatch = rawTaskText.match(todoistLinkRegex);
 									const todoistId = todoistMatch ? todoistMatch[1] : null;
+
 
 									this.log('[Taakje] ═══════════════════════════════════════');
 									this.log('[Taakje] ☑️ CHECKBOX CHANGED (File Modify)');
@@ -483,12 +486,12 @@ export default class TaakjePlugin extends Plugin {
 										if (newCompleted) {
 								const success = await this.completeTodoistTask(todoistId);
 								if (success) {
-									new Notice('Task completed');
+									new Notice(`Task completed: ${taskText}`);
 								}
 							} else {
 								const success = await this.reopenTodoistTask(todoistId);
 								if (success) {
-									new Notice('Task reopened');
+									new Notice(`Task reopened:  ${taskText}`);
 								}
 							}
 									}
@@ -549,6 +552,14 @@ export default class TaakjePlugin extends Plugin {
 			.replace(/[\u{2700}-\u{27BF}]/gu, '')   // Remove dingbats
 			.replace(/\s+/g, '')                     // Remove spaces
 			.toLowerCase();
+	}
+
+	// Extract clean task text without Todoist link and separator
+	getCleanTaskText(taskText: string): string {
+		const sep = this.settings?.separatorChar || '|';
+		// Create regex to match separator + Todoist link at the end
+		const todoistLinkPattern = new RegExp(`\\s*\\${sep}\\s*\\[Todoist\\]\\(https:\\/\\/app\\.todoist\\.com\\/app\\/task\\/[^)]+\\)\\s*$`);
+		return taskText.replace(todoistLinkPattern, '').trim();
 	}
 
 	// Get project ID based on file path and folder rules
@@ -710,7 +721,7 @@ export default class TaakjePlugin extends Plugin {
 	}
 
 	async createTodoistTask(content: string, obsidianLink: string, filePath: string, parentId: string | null = null, isCompleted: boolean = false): Promise<string | null> {
-		new Notice('Creating task...');
+		new Notice(`Creating task: ${content}.`);
 		const apiKey = await this.getApiKey();
 		if (!apiKey) return null;
 
@@ -896,13 +907,14 @@ export default class TaakjePlugin extends Plugin {
 			const match = line.match(taskRegex);
 			if (match && match[1] !== undefined && match[2] && match[3]) {
 				const indent = match[1].length; // Aantal spaties/tabs voor indentatie
-				const taskText = match[3].trim();
-				const todoistMatch = taskText.match(todoistLinkRegex);
+				const rawTaskText = match[3].trim();
+				const cleanTaskText = this.getCleanTaskText(rawTaskText);
+				const todoistMatch = rawTaskText.match(todoistLinkRegex);
 				tasks.push({
 					lineIndex: index,
 					indent: indent,
 					completed: match[2].toLowerCase() === 'x',
-					text: taskText,
+					text: cleanTaskText,
 					todoistId: todoistMatch && todoistMatch[1] ? todoistMatch[1] : null,
 					parentIndex: null // Wordt later bepaald
 				});
